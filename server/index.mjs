@@ -135,34 +135,50 @@ app.get('/api/auth/verify', requireAuth, (req, res) => {
 
 // ── Inventory ──
 app.get('/api/inventory', requireAuth, async (_req, res) => {
-  const db = await getDb()
-  const items = db
-    ? await db.collection('inventory').find({}).sort({ name: 1 }).toArray()
-    : memory.inventory
-  res.json(items.map(strip))
+  try {
+    const db = await getDb()
+    if (!db) {
+      console.warn('Atlas DB not connected on GET /api/inventory, using memory')
+      return res.json(memory.inventory.map(strip))
+    }
+    const items = await db.collection('inventory').find({}).sort({ name: 1 }).toArray()
+    res.json(items.map(strip))
+  } catch (err) {
+    console.error('Error in GET /api/inventory:', err)
+    res.status(500).json({ message: err.message })
+  }
 })
 
 app.post('/api/inventory', requireAuth, async (req, res) => {
-  const db = await getDb()
-  const now = new Date()
-  const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
-  const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-  
-  const item = {
-    ...req.body,
-    stock: Number(req.body.stock),
-    minimum: Number(req.body.minimum || 0),
-    status: Number(req.body.stock) < Number(req.body.minimum || 0) ? 'Low stock' : 'In stock',
-    updatedBy: req.user.name || req.user.username,
-    updatedByUsername: req.user.username,
-    updatedAt: `${dateStr} · ${timeStr}`,
+  try {
+    const db = await getDb()
+    const now = new Date()
+    const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+    const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+    
+    const item = {
+      ...req.body,
+      stock: Number(req.body.stock),
+      minimum: Number(req.body.minimum || 0),
+      status: Number(req.body.stock) < Number(req.body.minimum || 0) ? 'Low stock' : 'In stock',
+      updatedBy: req.user.name || req.user.username,
+      updatedByUsername: req.user.username,
+      updatedAt: `${dateStr} · ${timeStr}`,
+    }
+    if (db) {
+      await db.collection('inventory').updateOne({ name: item.name }, { $set: item }, { upsert: true })
+      console.log('Saved to Atlas collection inventory:', item.name)
+    } else {
+      console.warn('Atlas not connected on POST /api/inventory, saved to memory:', item.name)
+      const existing = memory.inventory.findIndex(i => i.name === item.name)
+      if (existing >= 0) memory.inventory[existing] = item
+      else memory.inventory.push(item)
+    }
+    res.status(201).json(strip(item))
+  } catch (err) {
+    console.error('Error in POST /api/inventory:', err)
+    res.status(500).json({ message: err.message })
   }
-  if (db) {
-    await db.collection('inventory').updateOne({ name: item.name }, { $set: item }, { upsert: true })
-  } else {
-    memory.inventory.push(item)
-  }
-  res.status(201).json(strip(item))
 })
 
 app.put('/api/inventory/:name', requireAuth, async (req, res) => {

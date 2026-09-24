@@ -143,11 +143,19 @@ function App() {
         const updaterUsername = currentUser ? currentUser.username : ''
         const timeNow = 'Today'
         const full: InventoryItem = { ...item, status: item.stock < item.minimum ? 'Low stock' : 'In stock', updatedBy: updater, updatedByUsername: updaterUsername, updatedAt: timeNow }
-        setInventory((c) => [...c, full])
+        setInventory((c) => {
+          const next = [...c.filter((e) => e.name !== item.name), full]
+          localStorage.setItem('northstar-cache-inventory', JSON.stringify(next))
+          return next
+        })
         const res = await fetch('/api/inventory', { method: 'POST', headers: apiHeaders(), body: JSON.stringify(item) }).catch(() => null)
         if (res && res.ok) {
           const saved = await res.json()
-          setInventory((c) => c.map((e) => e.name === saved.name ? { ...e, ...saved } : e))
+          setInventory((c) => {
+            const next = c.map((e) => e.name === saved.name ? { ...e, ...saved } : e)
+            localStorage.setItem('northstar-cache-inventory', JSON.stringify(next))
+            return next
+          })
         }
         actionDone('Inventory item added')
       }}
@@ -155,38 +163,70 @@ function App() {
         const updater = currentUser ? (currentUser.name || currentUser.username) : 'System'
         const updaterUsername = currentUser ? currentUser.username : ''
         const updatedItem: InventoryItem = { ...item, updatedBy: updater, updatedByUsername: updaterUsername, updatedAt: 'Just now' }
-        setInventory((c) => c.map((e) => e.name === inventoryToManage?.name ? updatedItem : e))
+        setInventory((c) => {
+          const next = c.map((e) => e.name === inventoryToManage?.name ? updatedItem : e)
+          localStorage.setItem('northstar-cache-inventory', JSON.stringify(next))
+          return next
+        })
         const res = await fetch(`/api/inventory/${encodeURIComponent(inventoryToManage!.name)}`, { method: 'PUT', headers: apiHeaders(), body: JSON.stringify(item) }).catch(() => null)
         if (res && res.ok) {
           const saved = await res.json()
-          setInventory((c) => c.map((e) => e.name === saved.name ? { ...e, ...saved } : e))
+          setInventory((c) => {
+            const next = c.map((e) => e.name === saved.name ? { ...e, ...saved } : e)
+            localStorage.setItem('northstar-cache-inventory', JSON.stringify(next))
+            return next
+          })
         }
         actionDone('Inventory item updated')
       }}
       onRemoveInventory={async () => {
         if (inventoryToManage) {
-          setInventory((c) => c.filter((item) => item.name !== inventoryToManage.name))
+          setInventory((c) => {
+            const next = c.filter((item) => item.name !== inventoryToManage.name)
+            localStorage.setItem('northstar-cache-inventory', JSON.stringify(next))
+            return next
+          })
           await fetch(`/api/inventory/${encodeURIComponent(inventoryToManage.name)}`, { method: 'DELETE', headers: apiHeaders() }).catch(() => {})
         }
         actionDone('Inventory item removed')
       }}
       onRemoveTaken={async () => {
         if (takenToRemove) {
-          setTaken((c) => c.filter((row) => row !== takenToRemove))
+          setTaken((c) => {
+            const next = c.filter((row) => row !== takenToRemove)
+            localStorage.setItem('northstar-cache-taken', JSON.stringify(next))
+            return next
+          })
           await fetch(`/api/handovers/${encodeURIComponent(takenToRemove._id ?? '')}`, { method: 'DELETE', headers: apiHeaders() }).catch(() => {})
         }
         actionDone('Item record deleted')
       }}
       onHandover={async (row) => {
-        setTaken((c) => [row, ...c])
-        setInventory((c) => c.map((item) => item.name === row.item ? { ...item, stock: item.stock - row.quantity, status: item.stock - row.quantity < item.minimum ? 'Low stock' : item.status } : item))
+        setTaken((c) => {
+          const next = [row, ...c]
+          localStorage.setItem('northstar-cache-taken', JSON.stringify(next))
+          return next
+        })
+        setInventory((c) => {
+          const next = c.map((item) => item.name === row.item ? { ...item, stock: item.stock - row.quantity, status: item.stock - row.quantity < item.minimum ? 'Low stock' : item.status } : item)
+          localStorage.setItem('northstar-cache-inventory', JSON.stringify(next))
+          return next
+        })
         await fetch('/api/handovers', { method: 'POST', headers: apiHeaders(), body: JSON.stringify(row) }).catch(() => {})
         await fetch(`/api/inventory/${encodeURIComponent(row.item)}/deduct`, { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ quantity: row.quantity }) }).catch(() => {})
         actionDone('Handover recorded')
       }}
       onRefill={async (row) => {
-        setRefills((c) => [row, ...c])
-        setInventory((c) => c.map((item) => item.name === row.item ? { ...item, stock: item.stock + row.quantity, status: item.stock + row.quantity < item.minimum ? 'Low stock' : 'In stock' } : item))
+        setRefills((c) => {
+          const next = [row, ...c]
+          localStorage.setItem('northstar-cache-refills', JSON.stringify(next))
+          return next
+        })
+        setInventory((c) => {
+          const next = c.map((item) => item.name === row.item ? { ...item, stock: item.stock + row.quantity, status: item.stock + row.quantity < item.minimum ? 'Low stock' : 'In stock' } : item)
+          localStorage.setItem('northstar-cache-inventory', JSON.stringify(next))
+          return next
+        })
         await fetch('/api/refills', { method: 'POST', headers: apiHeaders(), body: JSON.stringify(row) }).catch(() => {})
         await fetch(`/api/inventory/${encodeURIComponent(row.item)}/restock`, { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ quantity: row.quantity }) }).catch(() => {})
         actionDone('Refill recorded')
