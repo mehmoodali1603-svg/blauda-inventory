@@ -9,7 +9,6 @@ app.use(cors())
 app.use(express.json())
 
 // ── MongoDB Atlas connection ──
-// Use environment variable if provided on Vercel, fallback to project Atlas cluster
 const MONGODB_URI =
   process.env.MONGODB_URI ||
   'mongodb://mehmoodali1603_db_user:jpCRUXOLFemQHRLn@ac-n0rbena-shard-00-00.n5qjjir.mongodb.net:27017,ac-n0rbena-shard-00-01.n5qjjir.mongodb.net:27017,ac-n0rbena-shard-00-02.n5qjjir.mongodb.net:27017/?ssl=true&replicaSet=atlas-ez9mwg-shard-0&authSource=admin&retryWrites=true&w=majority&appName=Cluster0'
@@ -53,7 +52,7 @@ function publicUser(u) {
   return { username: u.username, name: u.name, role: u.role, active: u.active !== false }
 }
 
-// ── Stateless HMAC-signed Tokens (work seamlessly across Vercel serverless cold starts) ──
+// ── Stateless HMAC-signed Tokens ──
 const TOKEN_SECRET = process.env.TOKEN_SECRET || 'northstar-jwt-secret-key-production-2026'
 
 function createToken(payload) {
@@ -134,11 +133,18 @@ app.get('/api/inventory', requireAuth, async (_req, res) => {
 
 app.post('/api/inventory', requireAuth, async (req, res) => {
   const db = await getDb()
+  const now = new Date()
+  const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+  const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+  
   const item = {
     ...req.body,
     stock: Number(req.body.stock),
     minimum: Number(req.body.minimum || 0),
     status: Number(req.body.stock) < Number(req.body.minimum || 0) ? 'Low stock' : 'In stock',
+    updatedBy: req.user.name || req.user.username,
+    updatedByUsername: req.user.username,
+    updatedAt: `${dateStr} · ${timeStr}`,
   }
   if (db) {
     await db.collection('inventory').updateOne({ name: item.name }, { $set: item }, { upsert: true })
@@ -151,15 +157,22 @@ app.post('/api/inventory', requireAuth, async (req, res) => {
 app.put('/api/inventory/:name', requireAuth, async (req, res) => {
   const db = await getDb()
   const name = decodeURIComponent(req.params.name)
+  const now = new Date()
+  const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+  const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+
   const item = {
     ...req.body,
     stock: Number(req.body.stock),
     minimum: Number(req.body.minimum || 0),
     status: Number(req.body.stock) < Number(req.body.minimum || 0) ? 'Low stock' : 'In stock',
+    updatedBy: req.user.name || req.user.username,
+    updatedByUsername: req.user.username,
+    updatedAt: `${dateStr} · ${timeStr}`,
   }
   if (db) await db.collection('inventory').replaceOne({ name }, item, { upsert: true })
   else { const i = memory.inventory.findIndex((e) => e.name === name); if (i >= 0) memory.inventory[i] = item }
-  res.json(item)
+  res.json(strip(item))
 })
 
 app.delete('/api/inventory/:name', requireAuth, requireAdmin, async (req, res) => {
@@ -174,13 +187,27 @@ app.post('/api/inventory/:name/deduct', requireAuth, async (req, res) => {
   const db = await getDb()
   const name = decodeURIComponent(req.params.name)
   const qty = Number(req.body.quantity)
+  const now = new Date()
+  const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+  const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+  const updater = req.user.name || req.user.username
+
   if (db) {
-    await db.collection('inventory').updateOne({ name }, { $inc: { stock: -qty } })
+    await db.collection('inventory').updateOne({ name }, {
+      $inc: { stock: -qty },
+      $set: { updatedBy: updater, updatedByUsername: req.user.username, updatedAt: `${dateStr} · ${timeStr}` }
+    })
     const doc = await db.collection('inventory').findOne({ name })
     if (doc) await db.collection('inventory').updateOne({ name }, { $set: { status: doc.stock < doc.minimum ? 'Low stock' : 'In stock' } })
   } else {
     const item = memory.inventory.find((e) => e.name === name)
-    if (item) { item.stock -= qty; item.status = item.stock < item.minimum ? 'Low stock' : 'In stock' }
+    if (item) {
+      item.stock -= qty
+      item.status = item.stock < item.minimum ? 'Low stock' : 'In stock'
+      item.updatedBy = updater
+      item.updatedByUsername = req.user.username
+      item.updatedAt = `${dateStr} · ${timeStr}`
+    }
   }
   res.status(204).end()
 })
@@ -189,13 +216,27 @@ app.post('/api/inventory/:name/restock', requireAuth, async (req, res) => {
   const db = await getDb()
   const name = decodeURIComponent(req.params.name)
   const qty = Number(req.body.quantity)
+  const now = new Date()
+  const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+  const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+  const updater = req.user.name || req.user.username
+
   if (db) {
-    await db.collection('inventory').updateOne({ name }, { $inc: { stock: qty } })
+    await db.collection('inventory').updateOne({ name }, {
+      $inc: { stock: qty },
+      $set: { updatedBy: updater, updatedByUsername: req.user.username, updatedAt: `${dateStr} · ${timeStr}` }
+    })
     const doc = await db.collection('inventory').findOne({ name })
     if (doc) await db.collection('inventory').updateOne({ name }, { $set: { status: doc.stock < doc.minimum ? 'Low stock' : 'In stock' } })
   } else {
     const item = memory.inventory.find((e) => e.name === name)
-    if (item) { item.stock += qty; item.status = item.stock < item.minimum ? 'Low stock' : 'In stock' }
+    if (item) {
+      item.stock += qty
+      item.status = item.stock < item.minimum ? 'Low stock' : 'In stock'
+      item.updatedBy = updater
+      item.updatedByUsername = req.user.username
+      item.updatedAt = `${dateStr} · ${timeStr}`
+    }
   }
   res.status(204).end()
 })
@@ -211,7 +252,11 @@ app.get('/api/handovers', requireAuth, async (_req, res) => {
 
 app.post('/api/handovers', requireAuth, async (req, res) => {
   const db = await getDb()
-  const row = { ...req.body, quantity: Number(req.body.quantity) }
+  const row = {
+    ...req.body,
+    quantity: Number(req.body.quantity),
+    loggedBy: req.user.name || req.user.username,
+  }
   if (db) await db.collection('handovers').insertOne(row)
   else memory.handovers.unshift(row)
   res.status(201).json(strip(row))
@@ -237,7 +282,11 @@ app.get('/api/refills', requireAuth, async (_req, res) => {
 
 app.post('/api/refills', requireAuth, async (req, res) => {
   const db = await getDb()
-  const row = { ...req.body, quantity: Number(req.body.quantity) }
+  const row = {
+    ...req.body,
+    quantity: Number(req.body.quantity),
+    loggedBy: req.user.name || req.user.username,
+  }
   if (db) await db.collection('refills').insertOne(row)
   else memory.refills.unshift(row)
   res.status(201).json(strip(row))

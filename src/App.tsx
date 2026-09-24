@@ -4,7 +4,7 @@ import './App.css'
 
 type Page = 'overview' | 'inventory' | 'taken' | 'refills' | 'users'
 type Modal = 'inventory' | 'edit-inventory' | 'remove-inventory' | 'remove-taken' | 'handover' | 'refill' | 'user' | 'remove-user' | 'reset-password' | 'notifications' | 'help' | null
-type InventoryItem = { name: string; category: string; stock: number; minimum: number; unit: string; status: string }
+type InventoryItem = { name: string; category: string; stock: number; minimum: number; unit: string; status: string; updatedBy?: string; updatedByUsername?: string; updatedAt?: string }
 type TakenItem = { _id?: string; item: string; person: string; initials: string; quantity: number; purpose: string; date: string; time: string; status: string }
 type Refill = { _id?: string; item: string; person: string; initials: string; quantity: number; date: string; time: string; source: string; note: string }
 type User = { initials: string; name: string; username: string; password: string; role: string; access: string; active: boolean }
@@ -100,14 +100,28 @@ function App() {
     </main>
     {modal && <ModalShell modal={modal} close={() => { setModal(null); setUserToRemove(null); setInventoryToManage(null); setTakenToRemove(null) }} inventory={inventory} inventoryToManage={inventoryToManage} userToRemove={userToRemove} takenToRemove={takenToRemove}
       onInventory={async (item) => {
-        const full = { ...item, status: item.stock < item.minimum ? 'Low stock' : 'In stock' }
+        const updater = currentUser ? (currentUser.name || currentUser.username) : 'System'
+        const updaterUsername = currentUser ? currentUser.username : ''
+        const timeNow = 'Today'
+        const full: InventoryItem = { ...item, status: item.stock < item.minimum ? 'Low stock' : 'In stock', updatedBy: updater, updatedByUsername: updaterUsername, updatedAt: timeNow }
         setInventory((c) => [...c, full])
-        await fetch('/api/inventory', { method: 'POST', headers: apiHeaders(), body: JSON.stringify(item) }).catch(() => {})
+        const res = await fetch('/api/inventory', { method: 'POST', headers: apiHeaders(), body: JSON.stringify(item) }).catch(() => null)
+        if (res && res.ok) {
+          const saved = await res.json()
+          setInventory((c) => c.map((e) => e.name === saved.name ? { ...e, ...saved } : e))
+        }
         actionDone('Inventory item added')
       }}
       onEditInventory={async (item) => {
-        setInventory((c) => c.map((e) => e.name === inventoryToManage?.name ? item : e))
-        await fetch(`/api/inventory/${encodeURIComponent(inventoryToManage!.name)}`, { method: 'PUT', headers: apiHeaders(), body: JSON.stringify(item) }).catch(() => {})
+        const updater = currentUser ? (currentUser.name || currentUser.username) : 'System'
+        const updaterUsername = currentUser ? currentUser.username : ''
+        const updatedItem: InventoryItem = { ...item, updatedBy: updater, updatedByUsername: updaterUsername, updatedAt: 'Just now' }
+        setInventory((c) => c.map((e) => e.name === inventoryToManage?.name ? updatedItem : e))
+        const res = await fetch(`/api/inventory/${encodeURIComponent(inventoryToManage!.name)}`, { method: 'PUT', headers: apiHeaders(), body: JSON.stringify(item) }).catch(() => null)
+        if (res && res.ok) {
+          const saved = await res.json()
+          setInventory((c) => c.map((e) => e.name === saved.name ? { ...e, ...saved } : e))
+        }
         actionDone('Inventory item updated')
       }}
       onRemoveInventory={async () => {
@@ -217,7 +231,75 @@ function RefillPage({ rows, onAdd }: { rows: Refill[]; onAdd: () => void }) {
     </section>
   </>
 }
-function InventoryPage({ items, search, setSearch, isAdmin, onAdd, onEdit, onRemove }: { items: InventoryItem[]; search: string; setSearch: (value: string) => void; isAdmin: boolean; onAdd: () => void; onEdit: (item: InventoryItem) => void; onRemove: (item: InventoryItem) => void }) { const [category, setCategory] = useState('All'); const [status, setStatus] = useState('All'); const categories = ['All', ...new Set(items.map((item) => item.category))]; const filtered = items.filter((item) => (category === 'All' || item.category === category) && (status === 'All' || item.status === status)); return <><div className="page-heading"><div><div className="eyebrow">INVENTORY / ALL ITEMS</div><h1>Inventory</h1><p>Keep every item visible, counted, and ready for the next handover.</p></div><button className="primary-button" onClick={onAdd}><span>+</span> Add inventory</button></div><div className="filter-row"><div className="search-field"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search inventory..." /></div><select className="select-button" value={category} onChange={(event) => setCategory(event.target.value)}>{categories.map((option) => <option key={option} value={option}>{option === 'All' ? 'All categories' : option}</option>)}</select><select className="select-button" value={status} onChange={(event) => setStatus(event.target.value)}><option value="All">All stock statuses</option><option>In stock</option><option>Low stock</option></select></div><section className="panel table-panel"><table><thead><tr><th>ITEM</th><th>CATEGORY</th><th>AVAILABLE</th><th>MINIMUM</th><th>STATUS</th><th>ACTION</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.name}><td><strong>{item.name}</strong><span>Updated today</span></td><td>{item.category}</td><td><strong>{formatNumber(item.stock)}</strong> {item.unit}</td><td>{formatNumber(item.minimum)} {item.unit}</td><td><span className={`status ${item.status === 'Low stock' ? 'status-amber' : 'status-green'}`}>{item.status}</span></td><td><div className="inventory-actions"><button className="reset-button" onClick={() => onEdit(item)}>Edit</button>{isAdmin ? <button className="remove-button" onClick={() => onRemove(item)}>Remove</button> : <span className="protected-label">Edit only</span>}</div></td></tr>)}</tbody></table>{filtered.length === 0 && <div className="empty-state">No inventory matches the selected filters.</div>}</section></> }
+function InventoryPage({ items, search, setSearch, isAdmin, onAdd, onEdit, onRemove }: { items: InventoryItem[]; search: string; setSearch: (value: string) => void; isAdmin: boolean; onAdd: () => void; onEdit: (item: InventoryItem) => void; onRemove: (item: InventoryItem) => void }) {
+  const [category, setCategory] = useState('All')
+  const [status, setStatus] = useState('All')
+  const categories = ['All', ...new Set(items.map((item) => item.category))]
+  const filtered = items.filter((item) => (category === 'All' || item.category === category) && (status === 'All' || item.status === status))
+  return <>
+    <div className="page-heading">
+      <div><div className="eyebrow">INVENTORY / ALL ITEMS</div><h1>Inventory</h1><p>Keep every item visible, counted, and ready for the next handover.</p></div>
+      <button className="primary-button" onClick={onAdd}><span>+</span> Add inventory</button>
+    </div>
+    <div className="filter-row">
+      <div className="search-field"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search inventory..." /></div>
+      <select className="select-button" value={category} onChange={(event) => setCategory(event.target.value)}>
+        {categories.map((option) => <option key={option} value={option}>{option === 'All' ? 'All categories' : option}</option>)}
+      </select>
+      <select className="select-button" value={status} onChange={(event) => setStatus(event.target.value)}>
+        <option value="All">All stock statuses</option><option>In stock</option><option>Low stock</option>
+      </select>
+    </div>
+    <section className="panel table-panel">
+      <table>
+        <thead>
+          <tr>
+            <th>ITEM</th>
+            <th>CATEGORY</th>
+            <th>AVAILABLE</th>
+            <th>MINIMUM</th>
+            <th>STATUS</th>
+            <th>LAST UPDATED BY</th>
+            <th>ACTION</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filtered.map((item) => (
+            <tr key={item.name}>
+              <td>
+                <strong>{item.name}</strong>
+                <span>{item.updatedAt ? item.updatedAt : 'Updated today'}</span>
+              </td>
+              <td>{item.category}</td>
+              <td><strong>{formatNumber(item.stock)}</strong> {item.unit}</td>
+              <td>{formatNumber(item.minimum)} {item.unit}</td>
+              <td><span className={`status ${item.status === 'Low stock' ? 'status-amber' : 'status-green'}`}>{item.status}</span></td>
+              <td>
+                {item.updatedByUsername || item.updatedBy ? (
+                  <div className="updater-badge">
+                    <span className="updater-user">@{item.updatedByUsername || item.updatedBy}</span>
+                    {item.updatedBy && item.updatedBy !== item.updatedByUsername && (
+                      <small className="updater-name">{item.updatedBy}</small>
+                    )}
+                  </div>
+                ) : (
+                  <span className="updater-none">—</span>
+                )}
+              </td>
+              <td>
+                <div className="inventory-actions">
+                  <button className="reset-button" onClick={() => onEdit(item)}>Edit</button>
+                  {isAdmin ? <button className="remove-button" onClick={() => onRemove(item)}>Remove</button> : <span className="protected-label">Edit only</span>}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {filtered.length === 0 && <div className="empty-state">No inventory matches the selected filters.</div>}
+    </section>
+  </>
+}
 function UsersPage({ users, onAdd, onRemove, onReset }: { users: User[]; onAdd: () => void; onRemove: (user: User) => void; onReset: (user: User) => void }) {
   const [query, setQuery] = useState('')
   const [role, setRole] = useState('All')
