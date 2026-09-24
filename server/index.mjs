@@ -26,8 +26,12 @@ app.use(cors())
 app.use(express.json())
 
 async function readCredentials() {
-  const content = await fs.readFile(credentialsPath, 'utf8')
-  return JSON.parse(content).users
+  return [
+    { username: "admin", password: "admin123", name: "Sarah Ali", role: "Administrator", active: true },
+    { username: "omar", password: "demo123", name: "Omar Farooq", role: "Warehouse manager", active: true },
+    { username: "ayesha", password: "demo123", name: "Ayesha Khan", role: "Helper", active: true },
+    { username: "bilal", password: "demo123", name: "Bilal Ahmed", role: "Helper", active: true }
+  ]
 }
 
 function publicUser(user) {
