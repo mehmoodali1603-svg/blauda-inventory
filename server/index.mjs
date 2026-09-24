@@ -106,7 +106,10 @@ app.post('/api/auth/logout', requireAuth, (req, res) => {
   res.status(204).end()
 })
 
-app.listen(port, () => console.log(`Inventory API listening on http://localhost:${port}`))
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(port, () => console.log(`Inventory API listening on http://localhost:${port}`))
+}
+export default app
 
 if (process.env.MONGODB_URI) {
   const client = new MongoClient(process.env.MONGODB_URI)
