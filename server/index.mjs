@@ -17,26 +17,37 @@ const MONGODB_DB = process.env.MONGODB_DB || 'inventory'
 
 let _client = null
 let _db = null
+let _connectingPromise = null
 
 async function getDb() {
   if (_db) return _db
+  if (_connectingPromise) return _connectingPromise
 
-  if (!_client) {
-    _client = new MongoClient(MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000,
-      connectTimeoutMS: 5000,
-    })
-  }
+  _connectingPromise = (async () => {
+    if (!_client) {
+      _client = new MongoClient(MONGODB_URI, {
+        maxPoolSize: 10,
+        minPoolSize: 1,
+        serverSelectionTimeoutMS: 4000,
+        connectTimeoutMS: 4000,
+        socketTimeoutMS: 15000,
+      })
+    }
 
-  try {
-    await _client.connect()
-    _db = _client.db(MONGODB_DB)
-    console.log('MongoDB connected:', _db.databaseName)
-  } catch (err) {
-    console.error('MongoDB connect error:', err.message)
-    _db = null
-  }
-  return _db
+    try {
+      await _client.connect()
+      _db = _client.db(MONGODB_DB)
+      console.log('MongoDB connected:', _db.databaseName)
+      return _db
+    } catch (err) {
+      console.error('MongoDB connect error:', err.message)
+      _db = null
+      _connectingPromise = null
+      return null
+    }
+  })()
+
+  return _connectingPromise
 }
 
 // ── Auth credentials ──

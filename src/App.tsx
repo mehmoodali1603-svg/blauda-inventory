@@ -34,46 +34,85 @@ function App() {
   const [search, setSearch] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
   const [notice, setNotice] = useState('')
-  const [inventory, setInventory] = useState(initialInventory)
-  const [taken, setTaken] = useState(initialTaken)
-  const [refills, setRefills] = useState(initialRefills)
+  const [inventory, setInventory] = useState<InventoryItem[]>(() => {
+    try { const cached = localStorage.getItem('northstar-cache-inventory'); return cached ? JSON.parse(cached) : initialInventory } catch { return initialInventory }
+  })
+  const [taken, setTaken] = useState<TakenItem[]>(() => {
+    try { const cached = localStorage.getItem('northstar-cache-taken'); return cached ? JSON.parse(cached) : initialTaken } catch { return initialTaken }
+  })
+  const [refills, setRefills] = useState<Refill[]>(() => {
+    try { const cached = localStorage.getItem('northstar-cache-refills'); return cached ? JSON.parse(cached) : initialRefills } catch { return initialRefills }
+  })
   const [users, setUsers] = useState(initialUsers)
   const [userToRemove, setUserToRemove] = useState<User | null>(null)
   const [inventoryToManage, setInventoryToManage] = useState<InventoryItem | null>(null)
   const [takenToRemove, setTakenToRemove] = useState<TakenItem | null>(null)
-  const [booting, setBooting] = useState(true)
+  const [booting, setBooting] = useState(() => !localStorage.getItem('northstar-user'))
+  const [loadingData, setLoadingData] = useState(false)
 
-  // Auto-restore session from stored token (survives page refresh)
+  // Initialize cached user immediately so there is ZERO delay or flashing loading spinner
   useEffect(() => {
+    const cachedUser = localStorage.getItem('northstar-user')
     const token = localStorage.getItem('northstar-token')
-    if (!token) { setBooting(false); return }
-    fetch('/api/auth/verify', { headers: { Authorization: `Bearer ${token}` } })
-      .then(async (r) => {
+    if (cachedUser && token) {
+      try { setCurrentUser(JSON.parse(cachedUser)) } catch {}
+      setBooting(false)
+    }
+
+    if (!token) {
+      setBooting(false)
+      return
+    }
+
+    const headers: Record<string, string> = { Authorization: `Bearer ${token}` }
+    setLoadingData(true)
+
+    // Parallel fetch: verify token AND fetch all data simultaneously
+    Promise.all([
+      fetch('/api/auth/verify', { headers }).then(async (r) => {
         if (r.ok) {
           const user = await r.json()
-          setCurrentUser({ ...user, initials: initials(user.name), password: '', access: user.role === 'Administrator' ? 'Full access' : user.role === 'Helper' ? 'Take items' : 'Manage inventory' })
+          const fullUser = { ...user, initials: initials(user.name), password: '', access: user.role === 'Administrator' ? 'Full access' : user.role === 'Helper' ? 'Take items' : 'Manage inventory' }
+          setCurrentUser(fullUser)
+          localStorage.setItem('northstar-user', JSON.stringify(fullUser))
         } else {
           localStorage.removeItem('northstar-token')
+          localStorage.removeItem('northstar-user')
+          setCurrentUser(null)
         }
-      })
-      .catch(() => {})
-      .finally(() => setBooting(false))
+      }).catch(() => {}),
+      fetch('/api/inventory', { headers }).then(async (r) => {
+        if (r.ok) {
+          const data = await r.json()
+          setInventory(data)
+          localStorage.setItem('northstar-cache-inventory', JSON.stringify(data))
+        }
+      }).catch(() => {}),
+      fetch('/api/handovers', { headers }).then(async (r) => {
+        if (r.ok) {
+          const data = await r.json()
+          setTaken(data)
+          localStorage.setItem('northstar-cache-taken', JSON.stringify(data))
+        }
+      }).catch(() => {}),
+      fetch('/api/refills', { headers }).then(async (r) => {
+        if (r.ok) {
+          const data = await r.json()
+          setRefills(data)
+          localStorage.setItem('northstar-cache-refills', JSON.stringify(data))
+        }
+      }).catch(() => {})
+    ]).finally(() => {
+      setBooting(false)
+      setLoadingData(false)
+    })
   }, [])
+
   const pageTitle = navItems.find((item) => item.id === page)?.label ?? 'Overview'
   const filteredInventory = useMemo(() => inventory.filter((item) => `${item.name} ${item.category}`.toLowerCase().includes(search.toLowerCase())), [inventory, search])
   const openModal = (next: Modal) => { setModal(next); setNotice('') }
   const actionDone = (message: string) => { setModal(null); setNotice(message); window.setTimeout(() => setNotice(''), 3200) }
   const go = (next: Page) => { if (next === 'users' && currentUser?.role !== 'Administrator') { setNotice('Only administrators can manage users'); return } setPage(next); setMenuOpen(false) }
-
-  useEffect(() => {
-    if (!currentUser) return
-    const token = localStorage.getItem('northstar-token')
-    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
-    // Load all data from server (Atlas) on login
-    fetch('/api/inventory', { headers }).then(async (r) => { if (r.ok) setInventory(await r.json()) }).catch(() => {})
-    fetch('/api/handovers', { headers }).then(async (r) => { if (r.ok) setTaken(await r.json()) }).catch(() => {})
-    fetch('/api/refills', { headers }).then(async (r) => { if (r.ok) setRefills(await r.json()) }).catch(() => {})
-  }, [currentUser])
 
   const apiHeaders = () => {
     const token = localStorage.getItem('northstar-token')
@@ -81,7 +120,7 @@ function App() {
   }
 
   if (booting) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh',background:'#f5f4ef',flexDirection:'column',gap:16}}><div style={{width:40,height:40,borderRadius:'50%',border:'3px solid #e0ddd6',borderTopColor:'#df8c67',animation:'spin 0.8s linear infinite'}} /><style>{'@keyframes spin{to{transform:rotate(360deg)}}'}</style><span style={{color:'#8eada3',fontSize:12}}>Loading...</span></div>
-  if (!currentUser) return <LoginPage error={authError} onLogin={async (username, password) => { try { const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) }); if (!response.ok) throw new Error('Invalid username or password'); const result = await response.json(); localStorage.setItem('northstar-token', result.token); const user = result.user as Omit<User, 'initials' | 'password' | 'access'>; setCurrentUser({ ...user, initials: initials(user.name), password: '', access: user.role === 'Administrator' ? 'Full access' : user.role === 'Helper' ? 'Take items' : 'Manage inventory' }); setAuthError('') } catch { setAuthError('Invalid username or password') } }} />
+  if (!currentUser) return <LoginPage error={authError} onLogin={async (username, password) => { try { const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) }); if (!response.ok) throw new Error('Invalid username or password'); const result = await response.json(); localStorage.setItem('northstar-token', result.token); const user = result.user as Omit<User, 'initials' | 'password' | 'access'>; const fullUser = { ...user, initials: initials(user.name), password: '', access: user.role === 'Administrator' ? 'Full access' : user.role === 'Helper' ? 'Take items' : 'Manage inventory' }; setCurrentUser(fullUser); localStorage.setItem('northstar-user', JSON.stringify(fullUser)); setAuthError('') } catch { setAuthError('Invalid username or password') } }} />
 
   return <div className="app-shell">
     <aside className={`sidebar ${menuOpen ? 'open' : ''}`}>
@@ -89,7 +128,7 @@ function App() {
       <nav>{navItems.map((item) => <button key={item.id} className={page === item.id ? 'active' : ''} onClick={() => go(item.id)}><span className="nav-icon">{item.icon}</span>{item.label}</button>)}</nav>
       <div className="sidebar-bottom"><div className="timezone"><span className="live-dot" /> All times<br /><strong>Asia/Karachi (PKT)</strong></div><div className="account"><span className="avatar avatar-olive">{currentUser.initials}</span><span><strong>{currentUser.name}</strong><small>{currentUser.role}</small></span><button className="more" onClick={() => { localStorage.removeItem('northstar-token'); setCurrentUser(null) }} aria-label="Log out">↗</button></div></div>
     </aside>
-    <main className="main-content"><header className="topbar"><button className="menu-button" onClick={() => setMenuOpen(!menuOpen)} aria-label="Open menu">=</button><div className="breadcrumbs"><span>Northstar</span><b>/</b><strong>{pageTitle}</strong></div><div className="top-actions"><button className="icon-button" onClick={() => openModal('notifications')} aria-label="Show notifications">!</button><button className="help-button" onClick={() => openModal('help')}>Help <span>?</span></button></div></header>
+    <main className="main-content"><header className="topbar"><button className="menu-button" onClick={() => setMenuOpen(!menuOpen)} aria-label="Open menu">=</button><div className="breadcrumbs"><span>Northstar</span><b>/</b><strong>{pageTitle}</strong>{loadingData && <span style={{fontSize:11,color:'#8eada3',marginLeft:12,display:'inline-flex',alignItems:'center',gap:6}}><span style={{width:6,height:6,borderRadius:'50%',background:'#df8c67',display:'inline-block'}} /> Syncing with Atlas...</span>}</div><div className="top-actions"><button className="icon-button" onClick={() => openModal('notifications')} aria-label="Show notifications">!</button><button className="help-button" onClick={() => openModal('help')}>Help <span>?</span></button></div></header>
       {notice && <div className="toast" role="status">✓ {notice}</div>}<section className="page-content">
         {page === 'overview' && <OverviewPage inventory={inventory} taken={taken} onNavigate={go} onAdd={() => openModal('inventory')} />}
         {page === 'inventory' && <InventoryPage items={filteredInventory} search={search} setSearch={setSearch} isAdmin={currentUser.role === 'Administrator'} onAdd={() => openModal('inventory')} onEdit={(item) => { setInventoryToManage(item); openModal('edit-inventory') }} onRemove={(item) => { setInventoryToManage(item); openModal('remove-inventory') }} />}
