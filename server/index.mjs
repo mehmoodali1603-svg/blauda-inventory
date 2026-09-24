@@ -13,7 +13,7 @@ const MONGODB_URI =
   process.env.MONGODB_URI ||
   'mongodb://mehmoodali1603_db_user:jpCRUXOLFemQHRLn@ac-n0rbena-shard-00-00.n5qjjir.mongodb.net:27017,ac-n0rbena-shard-00-01.n5qjjir.mongodb.net:27017,ac-n0rbena-shard-00-02.n5qjjir.mongodb.net:27017/?ssl=true&replicaSet=atlas-ez9mwg-shard-0&authSource=admin&retryWrites=true&w=majority&appName=Cluster0'
 
-const MONGODB_DB = process.env.MONGODB_DB || 'northstar_inventory'
+const MONGODB_DB = process.env.MONGODB_DB || 'inventory'
 
 let _client = null
 let _db = null
