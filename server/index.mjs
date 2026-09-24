@@ -110,7 +110,12 @@ const memory = { inventory: [], handovers: [], refills: [] }
 // ── Health ──
 app.get('/api/health', async (_req, res) => {
   const db = await getDb()
-  res.json({ ok: true, storage: db ? 'mongodb-atlas' : 'memory' })
+  res.json({
+    ok: true,
+    storage: db ? 'mongodb-atlas' : 'memory',
+    db: db ? db.databaseName : null,
+    uriPrefix: MONGODB_URI ? MONGODB_URI.slice(0, 35) : 'not-set',
+  })
 })
 
 // ── Auth ──
