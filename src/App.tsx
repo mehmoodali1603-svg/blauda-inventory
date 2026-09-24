@@ -41,6 +41,24 @@ function App() {
   const [userToRemove, setUserToRemove] = useState<User | null>(null)
   const [inventoryToManage, setInventoryToManage] = useState<InventoryItem | null>(null)
   const [takenToRemove, setTakenToRemove] = useState<TakenItem | null>(null)
+  const [booting, setBooting] = useState(true)
+
+  // Auto-restore session from stored token (survives page refresh)
+  useEffect(() => {
+    const token = localStorage.getItem('northstar-token')
+    if (!token) { setBooting(false); return }
+    fetch('/api/auth/verify', { headers: { Authorization: `Bearer ${token}` } })
+      .then(async (r) => {
+        if (r.ok) {
+          const user = await r.json()
+          setCurrentUser({ ...user, initials: initials(user.name), password: '', access: user.role === 'Administrator' ? 'Full access' : user.role === 'Helper' ? 'Take items' : 'Manage inventory' })
+        } else {
+          localStorage.removeItem('northstar-token')
+        }
+      })
+      .catch(() => {})
+      .finally(() => setBooting(false))
+  }, [])
   const pageTitle = navItems.find((item) => item.id === page)?.label ?? 'Overview'
   const filteredInventory = useMemo(() => inventory.filter((item) => `${item.name} ${item.category}`.toLowerCase().includes(search.toLowerCase())), [inventory, search])
   const openModal = (next: Modal) => { setModal(next); setNotice('') }
@@ -49,7 +67,7 @@ function App() {
 
   useEffect(() => {
     if (!currentUser) return
-    const token = sessionStorage.getItem('northstar-token')
+    const token = localStorage.getItem('northstar-token')
     const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
     // Load all data from server (Atlas) on login
     fetch('/api/inventory', { headers }).then(async (r) => { if (r.ok) setInventory(await r.json()) }).catch(() => {})
@@ -58,11 +76,11 @@ function App() {
   }, [currentUser])
 
   const apiHeaders = () => {
-    const token = sessionStorage.getItem('northstar-token')
+    const token = localStorage.getItem('northstar-token')
     return { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }
   }
 
-  if (!currentUser) return <LoginPage error={authError} onLogin={async (username, password) => { try { const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) }); if (!response.ok) throw new Error('Invalid username or password'); const result = await response.json(); sessionStorage.setItem('northstar-token', result.token); const user = result.user as Omit<User, 'initials' | 'password' | 'access'>; setCurrentUser({ ...user, initials: initials(user.name), password: '', access: user.role === 'Administrator' ? 'Full access' : user.role === 'Helper' ? 'Take items' : 'Manage inventory' }); setAuthError('') } catch { setAuthError('Invalid username or password') } }} />
+  if (!currentUser) return <LoginPage error={authError} onLogin={async (username, password) => { try { const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) }); if (!response.ok) throw new Error('Invalid username or password'); const result = await response.json(); localStorage.setItem('northstar-token', result.token); const user = result.user as Omit<User, 'initials' | 'password' | 'access'>; setCurrentUser({ ...user, initials: initials(user.name), password: '', access: user.role === 'Administrator' ? 'Full access' : user.role === 'Helper' ? 'Take items' : 'Manage inventory' }); setAuthError('') } catch { setAuthError('Invalid username or password') } }} />
 
   return <div className="app-shell">
     <aside className={`sidebar ${menuOpen ? 'open' : ''}`}>

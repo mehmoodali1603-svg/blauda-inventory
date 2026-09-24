@@ -5,44 +5,53 @@ import crypto from 'node:crypto'
 import { MongoClient } from 'mongodb'
 
 const app = express()
-const sessions = new Map()
-const memory = { inventory: [], handovers: [], refills: [] }
-let database = null
-
-// Connect to MongoDB Atlas first, then start listening
-async function init() {
-  if (process.env.MONGODB_URI) {
-    try {
-      const client = new MongoClient(process.env.MONGODB_URI)
-      await client.connect()
-      database = client.db(process.env.MONGODB_DB || 'northstar_inventory')
-      console.log(`MongoDB connected: ${database.databaseName}`)
-    } catch (error) {
-      console.error('MongoDB connection failed; using memory storage:', error.message)
-    }
-  }
-  const port = Number(process.env.PORT || 4000)
-  if (process.env.NODE_ENV !== 'production') {
-    app.listen(port, () => console.log(`Inventory API listening on http://localhost:${port}`))
-  }
-}
-
-init()
-
 app.use(cors())
 app.use(express.json())
 
+// ── MongoDB: cached connection (survives warm Vercel invocations) ──
+let _client = null
+let _db = null
+
+async function getDb() {
+  if (_db) return _db                          // already connected
+  if (!process.env.MONGODB_URI) return null    // no URI → use memory
+
+  if (!_client) {
+    _client = new MongoClient(process.env.MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000,
+      connectTimeoutMS: 5000,
+    })
+  }
+
+  try {
+    await _client.connect()
+    _db = _client.db(process.env.MONGODB_DB || 'northstar_inventory')
+    console.log('MongoDB connected:', _db.databaseName)
+  } catch (err) {
+    console.error('MongoDB connect failed:', err.message)
+    _db = null
+  }
+  return _db
+}
+
+// ── In-memory fallback (for local dev without .env) ──
+const memory = { inventory: [], handovers: [], refills: [] }
+
+// ── Auth credentials ──
 async function readCredentials() {
   return [
-    { username: "ali", password: "123", name: "Ali", role: "Administrator", active: true },
-    { username: "shahid", password: "123", name: "Shahid", role: "Helper", active: true },
-    { username: "owais", password: "123", name: "Owais", role: "Administrator", active: true }
+    { username: 'ali',    password: '123', name: 'Ali',    role: 'Administrator', active: true },
+    { username: 'shahid', password: '123', name: 'Shahid', role: 'Helper',        active: true },
+    { username: 'owais',  password: '123', name: 'Owais',  role: 'Administrator', active: true },
   ]
 }
 
-function publicUser(user) {
-  return { username: user.username, name: user.name, role: user.role, active: user.active !== false }
+function publicUser(u) {
+  return { username: u.username, name: u.name, role: u.role, active: u.active !== false }
 }
+
+// ── Sessions (in-memory; Vercel resets these but token login re-creates) ──
+const sessions = new Map()
 
 function requireAuth(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '')
@@ -57,10 +66,17 @@ function requireAdmin(req, res, next) {
   next()
 }
 
-function col(name) { return database ? database.collection(name) : null }
-function strip(doc) { const { _id, ...rest } = doc; return rest }
+function strip(doc) {
+  if (!doc) return doc
+  const { _id, ...rest } = doc
+  return rest
+}
 
-app.get('/api/health', (_req, res) => res.json({ ok: true, storage: database ? 'mongodb' : 'memory' }))
+// ── Health ──
+app.get('/api/health', async (_req, res) => {
+  const db = await getDb()
+  res.json({ ok: true, storage: db ? 'mongodb' : 'memory' })
+})
 
 // ── Auth ──
 app.post('/api/auth/login', async (req, res) => {
@@ -82,93 +98,130 @@ app.post('/api/auth/logout', requireAuth, (req, res) => {
 
 // ── Inventory ──
 app.get('/api/inventory', requireAuth, async (_req, res) => {
-  const items = col('inventory') ? await col('inventory').find({}).sort({ name: 1 }).toArray() : memory.inventory
+  const db = await getDb()
+  const items = db
+    ? await db.collection('inventory').find({}).sort({ name: 1 }).toArray()
+    : memory.inventory
   res.json(items.map(strip))
 })
 
 app.post('/api/inventory', requireAuth, async (req, res) => {
-  const item = { ...req.body, stock: Number(req.body.stock), minimum: Number(req.body.minimum || 0), status: Number(req.body.stock) < Number(req.body.minimum || 0) ? 'Low stock' : 'In stock' }
-  if (col('inventory')) await col('inventory').insertOne(item)
+  const db = await getDb()
+  const item = {
+    ...req.body,
+    stock: Number(req.body.stock),
+    minimum: Number(req.body.minimum || 0),
+    status: Number(req.body.stock) < Number(req.body.minimum || 0) ? 'Low stock' : 'In stock',
+  }
+  if (db) await db.collection('inventory').insertOne(item)
   else memory.inventory.push(item)
   res.status(201).json(strip(item))
 })
 
 app.put('/api/inventory/:name', requireAuth, async (req, res) => {
-  const item = { ...req.body, stock: Number(req.body.stock), minimum: Number(req.body.minimum || 0), status: Number(req.body.stock) < Number(req.body.minimum || 0) ? 'Low stock' : 'In stock' }
+  const db = await getDb()
   const name = decodeURIComponent(req.params.name)
-  if (col('inventory')) await col('inventory').replaceOne({ name }, item, { upsert: true })
+  const item = {
+    ...req.body,
+    stock: Number(req.body.stock),
+    minimum: Number(req.body.minimum || 0),
+    status: Number(req.body.stock) < Number(req.body.minimum || 0) ? 'Low stock' : 'In stock',
+  }
+  if (db) await db.collection('inventory').replaceOne({ name }, item, { upsert: true })
   else { const i = memory.inventory.findIndex((e) => e.name === name); if (i >= 0) memory.inventory[i] = item }
   res.json(item)
 })
 
 app.delete('/api/inventory/:name', requireAuth, requireAdmin, async (req, res) => {
+  const db = await getDb()
   const name = decodeURIComponent(req.params.name)
-  if (col('inventory')) await col('inventory').deleteOne({ name })
-  else memory.inventory = memory.inventory.filter((item) => item.name !== name)
+  if (db) await db.collection('inventory').deleteOne({ name })
+  else memory.inventory = memory.inventory.filter((e) => e.name !== name)
   res.status(204).end()
 })
 
-// Deduct stock (handover)
 app.post('/api/inventory/:name/deduct', requireAuth, async (req, res) => {
+  const db = await getDb()
   const name = decodeURIComponent(req.params.name)
   const qty = Number(req.body.quantity)
-  if (col('inventory')) {
-    await col('inventory').updateOne({ name }, { $inc: { stock: -qty } })
-    const doc = await col('inventory').findOne({ name })
-    if (doc) { const newStatus = doc.stock < doc.minimum ? 'Low stock' : 'In stock'; await col('inventory').updateOne({ name }, { $set: { status: newStatus } }) }
-  } else { const item = memory.inventory.find((e) => e.name === name); if (item) { item.stock -= qty; item.status = item.stock < item.minimum ? 'Low stock' : 'In stock' } }
+  if (db) {
+    await db.collection('inventory').updateOne({ name }, { $inc: { stock: -qty } })
+    const doc = await db.collection('inventory').findOne({ name })
+    if (doc) await db.collection('inventory').updateOne({ name }, { $set: { status: doc.stock < doc.minimum ? 'Low stock' : 'In stock' } })
+  } else {
+    const item = memory.inventory.find((e) => e.name === name)
+    if (item) { item.stock -= qty; item.status = item.stock < item.minimum ? 'Low stock' : 'In stock' }
+  }
   res.status(204).end()
 })
 
-// Restock (refill)
 app.post('/api/inventory/:name/restock', requireAuth, async (req, res) => {
+  const db = await getDb()
   const name = decodeURIComponent(req.params.name)
   const qty = Number(req.body.quantity)
-  if (col('inventory')) {
-    await col('inventory').updateOne({ name }, { $inc: { stock: qty } })
-    const doc = await col('inventory').findOne({ name })
-    if (doc) { const newStatus = doc.stock < doc.minimum ? 'Low stock' : 'In stock'; await col('inventory').updateOne({ name }, { $set: { status: newStatus } }) }
-  } else { const item = memory.inventory.find((e) => e.name === name); if (item) { item.stock += qty; item.status = item.stock < item.minimum ? 'Low stock' : 'In stock' } }
+  if (db) {
+    await db.collection('inventory').updateOne({ name }, { $inc: { stock: qty } })
+    const doc = await db.collection('inventory').findOne({ name })
+    if (doc) await db.collection('inventory').updateOne({ name }, { $set: { status: doc.stock < doc.minimum ? 'Low stock' : 'In stock' } })
+  } else {
+    const item = memory.inventory.find((e) => e.name === name)
+    if (item) { item.stock += qty; item.status = item.stock < item.minimum ? 'Low stock' : 'In stock' }
+  }
   res.status(204).end()
 })
 
 // ── Handovers ──
 app.get('/api/handovers', requireAuth, async (_req, res) => {
-  const rows = col('handovers') ? await col('handovers').find({}).sort({ date: -1, time: -1 }).toArray() : memory.handovers
+  const db = await getDb()
+  const rows = db
+    ? await db.collection('handovers').find({}).sort({ date: -1, time: -1 }).toArray()
+    : memory.handovers
   res.json(rows.map(strip))
 })
 
 app.post('/api/handovers', requireAuth, async (req, res) => {
+  const db = await getDb()
   const row = { ...req.body, quantity: Number(req.body.quantity) }
-  if (col('handovers')) await col('handovers').insertOne(row)
+  if (db) await db.collection('handovers').insertOne(row)
   else memory.handovers.unshift(row)
   res.status(201).json(strip(row))
 })
 
 app.delete('/api/handovers/:id', requireAuth, requireAdmin, async (req, res) => {
-  const { ObjectId } = await import('mongodb')
-  const id = req.params.id
-  if (col('handovers') && id && id.length === 24) await col('handovers').deleteOne({ _id: new ObjectId(id) })
+  const db = await getDb()
+  if (db && req.params.id && req.params.id.length === 24) {
+    const { ObjectId } = await import('mongodb')
+    await db.collection('handovers').deleteOne({ _id: new ObjectId(req.params.id) })
+  }
   res.status(204).end()
 })
 
 // ── Refills ──
 app.get('/api/refills', requireAuth, async (_req, res) => {
-  const rows = col('refills') ? await col('refills').find({}).sort({ date: -1, time: -1 }).toArray() : memory.refills
+  const db = await getDb()
+  const rows = db
+    ? await db.collection('refills').find({}).sort({ date: -1, time: -1 }).toArray()
+    : memory.refills
   res.json(rows.map(strip))
 })
 
 app.post('/api/refills', requireAuth, async (req, res) => {
+  const db = await getDb()
   const row = { ...req.body, quantity: Number(req.body.quantity) }
-  if (col('refills')) await col('refills').insertOne(row)
+  if (db) await db.collection('refills').insertOne(row)
   else memory.refills.unshift(row)
   res.status(201).json(strip(row))
 })
 
 // ── Users ──
 app.get('/api/users', requireAuth, requireAdmin, async (_req, res) => {
-  const users = await readCredentials()
-  res.json(users.map(publicUser))
+  res.json((await readCredentials()).map(publicUser))
 })
+
+// ── Local dev server ──
+if (process.env.NODE_ENV !== 'production') {
+  const port = Number(process.env.PORT || 4000)
+  app.listen(port, () => console.log(`API listening on http://localhost:${port}`))
+}
 
 export default app
