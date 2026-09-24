@@ -11,12 +11,7 @@ const port = Number(process.env.PORT || 4000)
 const credentialsPath = path.join(process.cwd(), 'server', 'credentials.local.json')
 const sessions = new Map()
 const memory = {
-  inventory: [
-    { name: 'Thermal labels', category: 'Packing supplies', stock: 1420, minimum: 500, unit: 'rolls', status: 'In stock' },
-    { name: 'Cardboard boxes · M', category: 'Packing supplies', stock: 184, minimum: 250, unit: 'pieces', status: 'Low stock' },
-    { name: 'Safety gloves', category: 'Safety equipment', stock: 96, minimum: 80, unit: 'pairs', status: 'In stock' },
-    { name: 'Packing tape', category: 'Packing supplies', stock: 38, minimum: 60, unit: 'rolls', status: 'Low stock' },
-  ],
+  inventory: [],
   handovers: [],
   refills: [],
 }
@@ -27,10 +22,9 @@ app.use(express.json())
 
 async function readCredentials() {
   return [
-    { username: "admin", password: "admin123", name: "Sarah Ali", role: "Administrator", active: true },
-    { username: "omar", password: "demo123", name: "Omar Farooq", role: "Warehouse manager", active: true },
-    { username: "ayesha", password: "demo123", name: "Ayesha Khan", role: "Helper", active: true },
-    { username: "bilal", password: "demo123", name: "Bilal Ahmed", role: "Helper", active: true }
+    { username: "ali", password: "123", name: "Ali", role: "Administrator", active: true },
+    { username: "shahid", password: "123", name: "Shahid", role: "Helper", active: true },
+    { username: "owais", password: "123", name: "Owais", role: "Administrator", active: true }
   ]
 }
 
