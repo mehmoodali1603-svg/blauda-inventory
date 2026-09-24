@@ -5,8 +5,8 @@ import './App.css'
 type Page = 'overview' | 'inventory' | 'taken' | 'refills' | 'users'
 type Modal = 'inventory' | 'edit-inventory' | 'remove-inventory' | 'remove-taken' | 'handover' | 'refill' | 'user' | 'remove-user' | 'reset-password' | 'notifications' | 'help' | null
 type InventoryItem = { name: string; category: string; stock: number; minimum: number; unit: string; status: string }
-type TakenItem = { item: string; person: string; initials: string; quantity: number; purpose: string; date: string; time: string; status: string }
-type Refill = { item: string; person: string; initials: string; quantity: number; date: string; time: string; source: string; note: string }
+type TakenItem = { _id?: string; item: string; person: string; initials: string; quantity: number; purpose: string; date: string; time: string; status: string }
+type Refill = { _id?: string; item: string; person: string; initials: string; quantity: number; date: string; time: string; source: string; note: string }
 type User = { initials: string; name: string; username: string; password: string; role: string; access: string; active: boolean }
 
 const navItems: { id: Page; label: string; icon: string }[] = [
@@ -50,8 +50,17 @@ function App() {
   useEffect(() => {
     if (!currentUser) return
     const token = sessionStorage.getItem('northstar-token')
-    fetch('/api/inventory', { headers: token ? { Authorization: `Bearer ${token}` } : {} }).then(async (response) => { if (response.ok) setInventory(await response.json()) }).catch(() => setNotice('Showing saved demo stock while the server is offline'))
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+    // Load all data from server (Atlas) on login
+    fetch('/api/inventory', { headers }).then(async (r) => { if (r.ok) setInventory(await r.json()) }).catch(() => {})
+    fetch('/api/handovers', { headers }).then(async (r) => { if (r.ok) setTaken(await r.json()) }).catch(() => {})
+    fetch('/api/refills', { headers }).then(async (r) => { if (r.ok) setRefills(await r.json()) }).catch(() => {})
   }, [currentUser])
+
+  const apiHeaders = () => {
+    const token = sessionStorage.getItem('northstar-token')
+    return { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }
+  }
 
   if (!currentUser) return <LoginPage error={authError} onLogin={async (username, password) => { try { const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) }); if (!response.ok) throw new Error('Invalid username or password'); const result = await response.json(); sessionStorage.setItem('northstar-token', result.token); const user = result.user as Omit<User, 'initials' | 'password' | 'access'>; setCurrentUser({ ...user, initials: initials(user.name), password: '', access: user.role === 'Administrator' ? 'Full access' : user.role === 'Helper' ? 'Take items' : 'Manage inventory' }); setAuthError('') } catch { setAuthError('Invalid username or password') } }} />
 
@@ -70,7 +79,50 @@ function App() {
         {page === 'users' && currentUser.role === 'Administrator' && <UsersPage users={users} onAdd={() => openModal('user')} onRemove={(user) => { setUserToRemove(user); openModal('remove-user') }} onReset={(user) => { setUserToRemove(user); openModal('reset-password') }} />}
       </section>
     </main>
-    {modal && <ModalShell modal={modal} close={() => { setModal(null); setUserToRemove(null); setInventoryToManage(null); setTakenToRemove(null) }} inventory={inventory} inventoryToManage={inventoryToManage} userToRemove={userToRemove} takenToRemove={takenToRemove} onInventory={(item) => { setInventory((current) => [...current, { ...item, status: item.stock < item.minimum ? 'Low stock' : 'In stock' }]); actionDone('Inventory item added') }} onEditInventory={(item) => { setInventory((current) => current.map((existing) => existing.name === inventoryToManage?.name ? item : existing)); actionDone('Inventory item updated') }} onRemoveInventory={() => { if (inventoryToManage) setInventory((current) => current.filter((item) => item.name !== inventoryToManage.name)); actionDone('Inventory item removed') }} onRemoveTaken={() => { if (takenToRemove) setTaken((current) => current.filter((row) => row !== takenToRemove)); actionDone('Item record deleted') }} onHandover={(row) => { setTaken((current) => [row, ...current]); setInventory((current) => current.map((item) => item.name === row.item ? { ...item, stock: item.stock - row.quantity, status: item.stock - row.quantity < item.minimum ? 'Low stock' : item.status } : item)); actionDone('Handover recorded') }} onRefill={(row) => { setRefills((current) => [row, ...current]); setInventory((current) => current.map((item) => item.name === row.item ? { ...item, stock: item.stock + row.quantity, status: item.stock + row.quantity < item.minimum ? 'Low stock' : 'In stock' } : item)); actionDone('Refill recorded') }} onUser={(user) => { setUsers((current) => [...current, user]); actionDone('User invited successfully') }} onRemoveUser={() => { if (userToRemove) setUsers((current) => current.filter((user) => user.username !== userToRemove.username)); actionDone('User removed') }} onResetPassword={(password) => { if (userToRemove) setUsers((current) => current.map((user) => user.username === userToRemove.username ? { ...user, password } : user)); actionDone('Password reset successfully') }} />}
+    {modal && <ModalShell modal={modal} close={() => { setModal(null); setUserToRemove(null); setInventoryToManage(null); setTakenToRemove(null) }} inventory={inventory} inventoryToManage={inventoryToManage} userToRemove={userToRemove} takenToRemove={takenToRemove}
+      onInventory={async (item) => {
+        const full = { ...item, status: item.stock < item.minimum ? 'Low stock' : 'In stock' }
+        setInventory((c) => [...c, full])
+        await fetch('/api/inventory', { method: 'POST', headers: apiHeaders(), body: JSON.stringify(item) }).catch(() => {})
+        actionDone('Inventory item added')
+      }}
+      onEditInventory={async (item) => {
+        setInventory((c) => c.map((e) => e.name === inventoryToManage?.name ? item : e))
+        await fetch(`/api/inventory/${encodeURIComponent(inventoryToManage!.name)}`, { method: 'PUT', headers: apiHeaders(), body: JSON.stringify(item) }).catch(() => {})
+        actionDone('Inventory item updated')
+      }}
+      onRemoveInventory={async () => {
+        if (inventoryToManage) {
+          setInventory((c) => c.filter((item) => item.name !== inventoryToManage.name))
+          await fetch(`/api/inventory/${encodeURIComponent(inventoryToManage.name)}`, { method: 'DELETE', headers: apiHeaders() }).catch(() => {})
+        }
+        actionDone('Inventory item removed')
+      }}
+      onRemoveTaken={async () => {
+        if (takenToRemove) {
+          setTaken((c) => c.filter((row) => row !== takenToRemove))
+          await fetch(`/api/handovers/${encodeURIComponent(takenToRemove._id ?? '')}`, { method: 'DELETE', headers: apiHeaders() }).catch(() => {})
+        }
+        actionDone('Item record deleted')
+      }}
+      onHandover={async (row) => {
+        setTaken((c) => [row, ...c])
+        setInventory((c) => c.map((item) => item.name === row.item ? { ...item, stock: item.stock - row.quantity, status: item.stock - row.quantity < item.minimum ? 'Low stock' : item.status } : item))
+        await fetch('/api/handovers', { method: 'POST', headers: apiHeaders(), body: JSON.stringify(row) }).catch(() => {})
+        await fetch(`/api/inventory/${encodeURIComponent(row.item)}/deduct`, { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ quantity: row.quantity }) }).catch(() => {})
+        actionDone('Handover recorded')
+      }}
+      onRefill={async (row) => {
+        setRefills((c) => [row, ...c])
+        setInventory((c) => c.map((item) => item.name === row.item ? { ...item, stock: item.stock + row.quantity, status: item.stock + row.quantity < item.minimum ? 'Low stock' : 'In stock' } : item))
+        await fetch('/api/refills', { method: 'POST', headers: apiHeaders(), body: JSON.stringify(row) }).catch(() => {})
+        await fetch(`/api/inventory/${encodeURIComponent(row.item)}/restock`, { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ quantity: row.quantity }) }).catch(() => {})
+        actionDone('Refill recorded')
+      }}
+      onUser={(user) => { setUsers((c) => [...c, user]); actionDone('User invited successfully') }}
+      onRemoveUser={() => { if (userToRemove) setUsers((c) => c.filter((user) => user.username !== userToRemove.username)); actionDone('User removed') }}
+      onResetPassword={(password) => { if (userToRemove) setUsers((c) => c.map((user) => user.username === userToRemove.username ? { ...user, password } : user)); actionDone('Password reset successfully') }}
+    />}
   </div>
 }
 
@@ -89,9 +141,117 @@ function StatCard({ label, value, detail, tone, alert = false, onClick }: { labe
 function Person({ initials: value, name }: { initials: string; name: string }) { return <div className="person"><span className="avatar">{value}</span><strong>{name}</strong></div> }
 function ActivityTable({ rows, compact = false, isAdmin = false, onRemove }: { rows: TakenItem[]; compact?: boolean; isAdmin?: boolean; onRemove?: (row: TakenItem) => void }) { return <table><thead><tr><th>ITEM</th><th>PERSON</th><th>NUMBER OF ITEMS</th>{!compact && <th>WHY</th>}<th>DATE AND TIME <small>PAKISTAN</small></th><th>STATUS</th>{isAdmin && !compact && <th>ACTION</th>}</tr></thead><tbody>{rows.map((row) => <tr key={`${row.item}-${row.time}-${row.person}`}><td><strong>{row.item}</strong>{compact && <span>{row.purpose}</span>}</td><td><Person initials={row.initials} name={row.person} /></td><td><strong>{row.quantity}</strong></td>{!compact && <td>{row.purpose}</td>}<td><strong>{row.date}</strong><span>{row.time} · Islamabad</span></td><td><span className={`status ${row.status === 'Returned' ? 'status-green' : 'status-blue'}`}>{row.status}</span></td>{isAdmin && !compact && <td><button className="remove-button" onClick={() => onRemove?.(row)}>Delete</button></td>}</tr>)}</tbody></table> }
 function ActivityPage({ rows, isAdmin, onAdd, onRemove }: { rows: TakenItem[]; isAdmin: boolean; onAdd: () => void; onRemove: (row: TakenItem) => void }) { const [query, setQuery] = useState(''); const [status, setStatus] = useState('All'); const [date, setDate] = useState('All'); const filtered = rows.filter((row) => `${row.item} ${row.person} ${row.purpose}`.toLowerCase().includes(query.toLowerCase()) && (status === 'All' || row.status === status) && (date === 'All' || row.date === date)); return <><div className="page-heading"><div><div className="eyebrow">ITEMS USED BY PEOPLE</div><h1>Items used by people</h1><p>See who has an item, how many they have, and when it was given to them.</p></div><div className="heading-actions"><button className="secondary-button" onClick={() => downloadTakenCsv(filtered)}>Download Excel / CSV</button><button className="primary-button" onClick={onAdd}><span>+</span> Give out an item</button></div></div><div className="filter-row"><div className="search-field"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search item or person..." /></div><select className="select-button" aria-label="Filter by status" value={status} onChange={(event) => setStatus(event.target.value)}><option value="All">All statuses</option><option value="With user">With person</option><option>Returned</option></select><select className="select-button" aria-label="Filter by date" value={date} onChange={(event) => setDate(event.target.value)}><option value="All">All dates</option><option>24 Sep 2026</option><option>23 Sep 2026</option></select></div><section className="panel table-panel"><ActivityTable rows={filtered} isAdmin={isAdmin} onRemove={onRemove} /></section>{isAdmin && <div className="admin-note">Administrator: delete a record when that handout was entered by mistake.</div>}<div className="table-footer">Showing <strong>{filtered.length}</strong> of {rows.length} records <span>← &nbsp; 1 &nbsp; →</span></div></> }
-function RefillPage({ rows, onAdd }: { rows: Refill[]; onAdd: () => void }) { const [query, setQuery] = useState(''); const [period, setPeriod] = useState('All'); const filtered = rows.filter((row) => `${row.item} ${row.person} ${row.source}`.toLowerCase().includes(query.toLowerCase()) && (period === 'All' || row.date === period)); return <><div className="page-heading"><div><div className="eyebrow">INVENTORY / STOCK IN</div><h1>Refill activity</h1><p>See exactly who replenished stock, how much arrived, and when it was received.</p></div><button className="primary-button" onClick={onAdd}><span>+</span> Log a refill</button></div><div className="refill-highlight"><div className="refill-number">{formatNumber(filtered.reduce((sum, row) => sum + row.quantity, 0))}</div><div><strong>units in filtered log</strong><span>{filtered.length} completed refills</span></div><div className="refill-bar"><i /><i /><i /></div><div className="refill-meta"><span>Last refill</span><strong>{filtered[0]?.time ?? 'No refills'}</strong></div></div><div className="filter-row"><div className="search-field"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search item, person, or source..." /></div><select className="select-button" value={period} onChange={(event) => setPeriod(event.target.value)}><option>All</option><option>24 Sep 2026</option><option>23 Sep 2026</option><option>22 Sep 2026</option></select></div><section className="panel table-panel"><div className="panel-header"><div><div className="eyebrow">COMPLETE HISTORY</div><h2>Who refilled what</h2></div></div><table><thead><tr><th>ITEM</th><th>REFILLED BY</th><th>QUANTITY ADDED</th><th>RECEIVED</th><th>SOURCE / NOTE</th></tr></thead><tbody>{filtered.map((row) => <tr key={`${row.item}-${row.time}-${row.person}`}><td><strong>{row.item}</strong></td><td><Person initials={row.initials} name={row.person} /></td><td><strong className="quantity-positive">+{formatNumber(row.quantity)}</strong></td><td><strong>{row.date}</strong><span>{row.time} · Islamabad</span></td><td><strong>{row.source}</strong><span>{row.note}</span></td></tr>)}</tbody></table>{filtered.length === 0 && <div className="empty-state">No refills match the selected filters.</div>}</section></> }
+function RefillPage({ rows, onAdd }: { rows: Refill[]; onAdd: () => void }) {
+  const [query, setQuery] = useState('')
+  const [period, setPeriod] = useState('All')
+  const filtered = rows.filter((row) => `${row.item} ${row.person} ${row.source}`.toLowerCase().includes(query.toLowerCase()) && (period === 'All' || row.date === period))
+  const totalUnits = filtered.reduce((sum, row) => sum + row.quantity, 0)
+  return <>
+    <div className="page-heading">
+      <div><div className="eyebrow">INVENTORY / RESTOCKING</div><h1>Restocking</h1><p>Track every stock replenishment — who restocked it, how much came in, and from where.</p></div>
+      <button className="primary-button" onClick={onAdd}><span>+</span> Log a refill</button>
+    </div>
+    <div className="refill-stats-grid">
+      <div className="refill-stat-card refill-stat-ink">
+        <div className="eyebrow" style={{color:'#a7c5b9',marginBottom:12}}>TOTAL REFILLS</div>
+        <strong className="refill-stat-number">{filtered.length}</strong>
+        <span className="refill-stat-label">entries in log</span>
+      </div>
+      <div className="refill-stat-card refill-stat-coral">
+        <div className="eyebrow" style={{color:'#f5c4aa',marginBottom:12}}>UNITS RESTOCKED</div>
+        <strong className="refill-stat-number">{formatNumber(totalUnits)}</strong>
+        <span className="refill-stat-label">units added to stock</span>
+      </div>
+      <div className="refill-stat-card refill-stat-sage">
+        <div className="eyebrow" style={{color:'#b5d0c5',marginBottom:12}}>LAST ACTIVITY</div>
+        <strong className="refill-stat-number" style={{fontSize:22}}>{filtered[0]?.date ?? '—'}</strong>
+        <span className="refill-stat-label">{filtered[0]?.time ? `at ${filtered[0].time}` : 'No refills yet'}</span>
+      </div>
+    </div>
+    <div className="filter-row">
+      <div className="search-field"><span>⌕</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search item, person, or source..." /></div>
+      <select className="select-button" value={period} onChange={(e) => setPeriod(e.target.value)}>
+        <option value="All">All dates</option>
+        <option>24 Sep 2026</option><option>23 Sep 2026</option><option>22 Sep 2026</option>
+      </select>
+    </div>
+    <section className="panel table-panel">
+      <div className="panel-header" style={{padding:'20px 22px 0'}}>
+        <div><div className="eyebrow">COMPLETE HISTORY</div><h2>Who refilled what</h2></div>
+      </div>
+      {filtered.length === 0
+        ? <div className="refill-empty">
+            <div className="refill-empty-icon">📦</div>
+            <strong>No refills logged yet</strong>
+            <p>Click "Log a refill" above to record a stock replenishment.</p>
+            <button className="primary-button" onClick={onAdd}><span>+</span> Log first refill</button>
+          </div>
+        : <table><thead><tr><th>ITEM</th><th>REFILLED BY</th><th>QUANTITY ADDED</th><th>RECEIVED</th><th>SOURCE / NOTE</th></tr></thead>
+            <tbody>{filtered.map((row) => <tr key={`${row.item}-${row.time}-${row.person}`}>
+              <td><strong>{row.item}</strong></td>
+              <td><Person initials={row.initials} name={row.person} /></td>
+              <td><strong className="quantity-positive">+{formatNumber(row.quantity)}</strong></td>
+              <td><strong>{row.date}</strong><span>{row.time} · Islamabad</span></td>
+              <td><strong>{row.source}</strong><span>{row.note}</span></td>
+            </tr>)}</tbody>
+          </table>}
+    </section>
+  </>
+}
 function InventoryPage({ items, search, setSearch, isAdmin, onAdd, onEdit, onRemove }: { items: InventoryItem[]; search: string; setSearch: (value: string) => void; isAdmin: boolean; onAdd: () => void; onEdit: (item: InventoryItem) => void; onRemove: (item: InventoryItem) => void }) { const [category, setCategory] = useState('All'); const [status, setStatus] = useState('All'); const categories = ['All', ...new Set(items.map((item) => item.category))]; const filtered = items.filter((item) => (category === 'All' || item.category === category) && (status === 'All' || item.status === status)); return <><div className="page-heading"><div><div className="eyebrow">INVENTORY / ALL ITEMS</div><h1>Inventory</h1><p>Keep every item visible, counted, and ready for the next handover.</p></div><button className="primary-button" onClick={onAdd}><span>+</span> Add inventory</button></div><div className="filter-row"><div className="search-field"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search inventory..." /></div><select className="select-button" value={category} onChange={(event) => setCategory(event.target.value)}>{categories.map((option) => <option key={option} value={option}>{option === 'All' ? 'All categories' : option}</option>)}</select><select className="select-button" value={status} onChange={(event) => setStatus(event.target.value)}><option value="All">All stock statuses</option><option>In stock</option><option>Low stock</option></select></div><section className="panel table-panel"><table><thead><tr><th>ITEM</th><th>CATEGORY</th><th>AVAILABLE</th><th>MINIMUM</th><th>STATUS</th><th>ACTION</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.name}><td><strong>{item.name}</strong><span>Updated today</span></td><td>{item.category}</td><td><strong>{formatNumber(item.stock)}</strong> {item.unit}</td><td>{formatNumber(item.minimum)} {item.unit}</td><td><span className={`status ${item.status === 'Low stock' ? 'status-amber' : 'status-green'}`}>{item.status}</span></td><td><div className="inventory-actions"><button className="reset-button" onClick={() => onEdit(item)}>Edit</button>{isAdmin ? <button className="remove-button" onClick={() => onRemove(item)}>Remove</button> : <span className="protected-label">Edit only</span>}</div></td></tr>)}</tbody></table>{filtered.length === 0 && <div className="empty-state">No inventory matches the selected filters.</div>}</section></> }
-function UsersPage({ users, onAdd, onRemove, onReset }: { users: User[]; onAdd: () => void; onRemove: (user: User) => void; onReset: (user: User) => void }) { const [query, setQuery] = useState(''); const [role, setRole] = useState('All'); const filtered = users.filter((user) => `${user.name} ${user.username}`.toLowerCase().includes(query.toLowerCase()) && (role === 'All' || user.role === role)); return <><div className="page-heading"><div><div className="eyebrow">ADMINISTRATION / PEOPLE</div><h1>User access</h1><p>Manage usernames, roles, and password access for every team member.</p></div><button className="primary-button" onClick={onAdd}><span>+</span> Add user</button></div><div className="user-summary"><div><strong>{users.filter((user) => user.active).length}</strong><span>active users</span></div><div><strong>{users.filter((user) => user.role === 'Administrator').length}</strong><span>administrator</span></div><div><strong>{users.filter((user) => user.role.includes('manager')).length}</strong><span>warehouse manager</span></div><div><strong>{users.filter((user) => user.role === 'Helper').length}</strong><span>helpers</span></div></div><div className="filter-row"><div className="search-field"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name or username..." /></div><select className="select-button" value={role} onChange={(event) => setRole(event.target.value)}><option value="All">All roles</option><option>Administrator</option><option>Warehouse manager</option><option>Helper</option></select></div><section className="panel table-panel"><table><thead><tr><th>USER</th><th>USERNAME</th><th>ROLE</th><th>ACCESS LEVEL</th><th>LAST ACTIVE</th><th>STATUS</th><th>ACTION</th></tr></thead><tbody>{filtered.map((user) => <tr key={user.name}><td><Person initials={user.initials} name={user.name} /></td><td><strong>{user.username}</strong></td><td>{user.role}</td><td>{user.access}</td><td>Today, 10:42 AM</td><td><span className={`status ${user.active ? 'status-green' : 'status-amber'}`}>{user.active ? 'Active' : 'Invited'}</span></td><td>{user.role === 'Administrator' ? <span className="protected-label">Protected</span> : <div className="user-actions"><button className="reset-button" onClick={() => onReset(user)}>Reset password</button><button className="remove-button" onClick={() => onRemove(user)}>Remove</button></div>}</td></tr>)}</tbody></table>{filtered.length === 0 && <div className="empty-state">No users match the selected filters.</div>}</section></> }
+function UsersPage({ users, onAdd, onRemove, onReset }: { users: User[]; onAdd: () => void; onRemove: (user: User) => void; onReset: (user: User) => void }) {
+  const [query, setQuery] = useState('')
+  const [role, setRole] = useState('All')
+  const filtered = users.filter((user) => `${user.name} ${user.username}`.toLowerCase().includes(query.toLowerCase()) && (role === 'All' || user.role === role))
+  const roleColor = (r: string) => r === 'Administrator' ? 'role-admin' : r === 'Helper' ? 'role-helper' : 'role-manager'
+  return <>
+    <div className="page-heading">
+      <div><div className="eyebrow">ADMINISTRATION / PEOPLE</div><h1>People & Access</h1><p>Manage usernames, roles, and password access for every team member.</p></div>
+      <button className="primary-button" onClick={onAdd}><span>+</span> Add user</button>
+    </div>
+    <div className="user-stats-bar">
+      <div className="user-stat"><strong>{users.filter((u) => u.active).length}</strong><span>Active</span></div>
+      <div className="user-stat-divider" />
+      <div className="user-stat"><strong>{users.filter((u) => u.role === 'Administrator').length}</strong><span>Admins</span></div>
+      <div className="user-stat-divider" />
+      <div className="user-stat"><strong>{users.filter((u) => u.role === 'Helper').length}</strong><span>Helpers</span></div>
+      <div className="user-stat-divider" />
+      <div className="user-stat"><strong>{users.filter((u) => u.role.includes('manager')).length}</strong><span>Managers</span></div>
+    </div>
+    <div className="filter-row">
+      <div className="search-field"><span>⌕</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name or username..." /></div>
+      <select className="select-button" value={role} onChange={(e) => setRole(e.target.value)}>
+        <option value="All">All roles</option><option>Administrator</option><option>Warehouse manager</option><option>Helper</option>
+      </select>
+    </div>
+    {filtered.length === 0
+      ? <div className="panel" style={{padding:48,textAlign:'center',color:'#96a19b',fontSize:13}}>No users match the selected filters.</div>
+      : <div className="user-card-grid">
+          {filtered.map((user) => (
+            <div className="user-card" key={user.username}>
+              <div className="user-card-top">
+                <div className="user-avatar-lg">{user.initials}</div>
+                <span className={`role-badge ${roleColor(user.role)}`}>{user.role}</span>
+              </div>
+              <div className="user-card-name">{user.name}</div>
+              <div className="user-card-username">@{user.username}</div>
+              <div className="user-card-meta">
+                <span className={`status ${user.active ? 'status-green' : 'status-amber'}`}>{user.active ? 'Active' : 'Inactive'}</span>
+                <span className="user-card-access">{user.access}</span>
+              </div>
+              <div className="user-card-actions">
+                {user.role === 'Administrator'
+                  ? <span className="protected-label" style={{display:'block',textAlign:'center',padding:'8px 0'}}>⚙ Administrator — protected</span>
+                  : <><button className="reset-button" style={{flex:1}} onClick={() => onReset(user)}>Reset password</button>
+                     <button className="remove-button" style={{flex:1}} onClick={() => onRemove(user)}>Remove</button></>
+                }
+              </div>
+            </div>
+          ))}
+        </div>
+    }
+  </>
+}
 
 function ModalShell({ modal, close, inventory, inventoryToManage, userToRemove, takenToRemove, onInventory, onEditInventory, onRemoveInventory, onRemoveTaken, onHandover, onRefill, onUser, onRemoveUser, onResetPassword }: { modal: Exclude<Modal, null>; close: () => void; inventory: InventoryItem[]; inventoryToManage: InventoryItem | null; userToRemove: User | null; takenToRemove: TakenItem | null; onInventory: (item: Omit<InventoryItem, 'status'>) => void; onEditInventory: (item: InventoryItem) => void; onRemoveInventory: () => void; onRemoveTaken: () => void; onHandover: (row: TakenItem) => void; onRefill: (row: Refill) => void; onUser: (user: User) => void; onRemoveUser: () => void; onResetPassword: (password: string) => void }) {
   const [form, setForm] = useState<Record<string, string>>((): Record<string, string> => inventoryToManage ? { name: inventoryToManage.name, category: inventoryToManage.category, stock: String(inventoryToManage.stock), minimum: String(inventoryToManage.minimum), unit: inventoryToManage.unit } : {})
