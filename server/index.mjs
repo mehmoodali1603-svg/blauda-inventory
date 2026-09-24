@@ -8,16 +8,22 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
-// ── MongoDB: cached connection (survives warm Vercel invocations) ──
+// ── MongoDB Atlas connection ──
+// Use environment variable if provided on Vercel, fallback to project Atlas cluster
+const MONGODB_URI =
+  process.env.MONGODB_URI ||
+  'mongodb://mehmoodali1603_db_user:jpCRUXOLFemQHRLn@ac-n0rbena-shard-00-00.n5qjjir.mongodb.net:27017,ac-n0rbena-shard-00-01.n5qjjir.mongodb.net:27017,ac-n0rbena-shard-00-02.n5qjjir.mongodb.net:27017/?ssl=true&replicaSet=atlas-ez9mwg-shard-0&authSource=admin&retryWrites=true&w=majority&appName=Cluster0'
+
+const MONGODB_DB = process.env.MONGODB_DB || 'northstar_inventory'
+
 let _client = null
 let _db = null
 
 async function getDb() {
-  if (_db) return _db                          // already connected
-  if (!process.env.MONGODB_URI) return null    // no URI → use memory
+  if (_db) return _db
 
   if (!_client) {
-    _client = new MongoClient(process.env.MONGODB_URI, {
+    _client = new MongoClient(MONGODB_URI, {
       serverSelectionTimeoutMS: 5000,
       connectTimeoutMS: 5000,
     })
@@ -25,17 +31,14 @@ async function getDb() {
 
   try {
     await _client.connect()
-    _db = _client.db(process.env.MONGODB_DB || 'northstar_inventory')
+    _db = _client.db(MONGODB_DB)
     console.log('MongoDB connected:', _db.databaseName)
   } catch (err) {
-    console.error('MongoDB connect failed:', err.message)
+    console.error('MongoDB connect error:', err.message)
     _db = null
   }
   return _db
 }
-
-// ── In-memory fallback (for local dev without .env) ──
-const memory = { inventory: [], handovers: [], refills: [] }
 
 // ── Auth credentials ──
 async function readCredentials() {
@@ -50,14 +53,32 @@ function publicUser(u) {
   return { username: u.username, name: u.name, role: u.role, active: u.active !== false }
 }
 
-// ── Sessions (in-memory; Vercel resets these but token login re-creates) ──
-const sessions = new Map()
+// ── Stateless HMAC-signed Tokens (work seamlessly across Vercel serverless cold starts) ──
+const TOKEN_SECRET = process.env.TOKEN_SECRET || 'northstar-jwt-secret-key-production-2026'
+
+function createToken(payload) {
+  const data = Buffer.from(JSON.stringify(payload)).toString('base64url')
+  const sig = crypto.createHmac('sha256', TOKEN_SECRET).update(data).digest('base64url')
+  return `${data}.${sig}`
+}
+
+function verifyToken(token) {
+  if (!token || !token.includes('.')) return null
+  const [data, sig] = token.split('.')
+  const expectedSig = crypto.createHmac('sha256', TOKEN_SECRET).update(data).digest('base64url')
+  if (sig !== expectedSig) return null
+  try {
+    return JSON.parse(Buffer.from(data, 'base64url').toString('utf8'))
+  } catch {
+    return null
+  }
+}
 
 function requireAuth(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '')
-  const session = token && sessions.get(token)
-  if (!session) return res.status(401).json({ message: 'Please sign in again.' })
-  req.user = session
+  const user = verifyToken(token)
+  if (!user) return res.status(401).json({ message: 'Please sign in again.' })
+  req.user = user
   next()
 }
 
@@ -72,10 +93,13 @@ function strip(doc) {
   return rest
 }
 
+// ── In-memory fallback (only if Atlas is temporarily unreachable) ──
+const memory = { inventory: [], handovers: [], refills: [] }
+
 // ── Health ──
 app.get('/api/health', async (_req, res) => {
   const db = await getDb()
-  res.json({ ok: true, storage: db ? 'mongodb' : 'memory' })
+  res.json({ ok: true, storage: db ? 'mongodb-atlas' : 'memory' })
 })
 
 // ── Auth ──
@@ -85,14 +109,12 @@ app.post('/api/auth/login', async (req, res) => {
   const users = await readCredentials()
   const user = users.find((c) => c.username === username && c.password === password)
   if (!user) return res.status(401).json({ message: 'Invalid username or password.' })
-  const token = crypto.randomBytes(32).toString('hex')
-  sessions.set(token, publicUser(user))
-  res.json({ token, user: publicUser(user) })
+  const userInfo = publicUser(user)
+  const token = createToken(userInfo)
+  res.json({ token, user: userInfo })
 })
 
-app.post('/api/auth/logout', requireAuth, (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '')
-  sessions.delete(token)
+app.post('/api/auth/logout', requireAuth, (_req, res) => {
   res.status(204).end()
 })
 
@@ -118,8 +140,11 @@ app.post('/api/inventory', requireAuth, async (req, res) => {
     minimum: Number(req.body.minimum || 0),
     status: Number(req.body.stock) < Number(req.body.minimum || 0) ? 'Low stock' : 'In stock',
   }
-  if (db) await db.collection('inventory').insertOne(item)
-  else memory.inventory.push(item)
+  if (db) {
+    await db.collection('inventory').updateOne({ name: item.name }, { $set: item }, { upsert: true })
+  } else {
+    memory.inventory.push(item)
+  }
   res.status(201).json(strip(item))
 })
 
