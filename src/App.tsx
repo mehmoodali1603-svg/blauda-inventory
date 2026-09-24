@@ -80,6 +80,7 @@ function App() {
     return { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }
   }
 
+  if (booting) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',minHeight:'100vh',background:'#f5f4ef',flexDirection:'column',gap:16}}><div style={{width:40,height:40,borderRadius:'50%',border:'3px solid #e0ddd6',borderTopColor:'#df8c67',animation:'spin 0.8s linear infinite'}} /><style>{'@keyframes spin{to{transform:rotate(360deg)}}'}</style><span style={{color:'#8eada3',fontSize:12}}>Loading...</span></div>
   if (!currentUser) return <LoginPage error={authError} onLogin={async (username, password) => { try { const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) }); if (!response.ok) throw new Error('Invalid username or password'); const result = await response.json(); localStorage.setItem('northstar-token', result.token); const user = result.user as Omit<User, 'initials' | 'password' | 'access'>; setCurrentUser({ ...user, initials: initials(user.name), password: '', access: user.role === 'Administrator' ? 'Full access' : user.role === 'Helper' ? 'Take items' : 'Manage inventory' }); setAuthError('') } catch { setAuthError('Invalid username or password') } }} />
 
   return <div className="app-shell">

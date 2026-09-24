@@ -96,6 +96,11 @@ app.post('/api/auth/logout', requireAuth, (req, res) => {
   res.status(204).end()
 })
 
+// Verify stored token and return user (used on page refresh)
+app.get('/api/auth/verify', requireAuth, (req, res) => {
+  res.json(req.user)
+})
+
 // ── Inventory ──
 app.get('/api/inventory', requireAuth, async (_req, res) => {
   const db = await getDb()
