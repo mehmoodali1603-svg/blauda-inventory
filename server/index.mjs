@@ -9,9 +9,10 @@ app.use(cors())
 app.use(express.json())
 
 // ── MongoDB Atlas connection ──
+// Use mongodb+srv:// format — required for Vercel serverless TLS compatibility
 const MONGODB_URI =
   process.env.MONGODB_URI ||
-  'mongodb://mehmoodali1603_db_user:jpCRUXOLFemQHRLn@ac-n0rbena-shard-00-00.n5qjjir.mongodb.net:27017,ac-n0rbena-shard-00-01.n5qjjir.mongodb.net:27017,ac-n0rbena-shard-00-02.n5qjjir.mongodb.net:27017/?ssl=true&replicaSet=atlas-ez9mwg-shard-0&authSource=admin&retryWrites=true&w=majority&appName=Cluster0'
+  'mongodb+srv://mehmoodali1603_db_user:jpCRUXOLFemQHRLn@cluster0.n5qjjir.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0'
 
 const MONGODB_DB = process.env.MONGODB_DB || 'inventory'
 
@@ -28,9 +29,9 @@ async function getDb() {
       _client = new MongoClient(MONGODB_URI, {
         maxPoolSize: 10,
         minPoolSize: 1,
-        serverSelectionTimeoutMS: 4000,
-        connectTimeoutMS: 4000,
-        socketTimeoutMS: 15000,
+        serverSelectionTimeoutMS: 8000,
+        connectTimeoutMS: 8000,
+        socketTimeoutMS: 20000,
       })
     }
 
