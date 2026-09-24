@@ -50,7 +50,7 @@ function App() {
   useEffect(() => {
     if (!currentUser) return
     const token = sessionStorage.getItem('northstar-token')
-    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
     // Load all data from server (Atlas) on login
     fetch('/api/inventory', { headers }).then(async (r) => { if (r.ok) setInventory(await r.json()) }).catch(() => {})
     fetch('/api/handovers', { headers }).then(async (r) => { if (r.ok) setTaken(await r.json()) }).catch(() => {})
